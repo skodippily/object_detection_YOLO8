@@ -4,10 +4,11 @@ from ultralytics import YOLO
 
 MODEL = "yolov8n.pt"
 CONFIDENCE = 0.5
-# SOURCE = "131232-749706873.mp4"  # 0 = webcam, or video file path
+# SOURCE = "131232-749706873.mp4"  # 0 = webcam, or JETSON for gstreamer camera source
 SOURCE = 0
 
-TARGET_CLASSES = [0, 1, 2, 3, 5, 7]  # person, bicycle, car, motorcycle, bus, truck
+# person, bicycle, car, motorcycle, bus, truck
+TARGET_CLASSES = [0, 1, 2, 3, 5, 7]
 
 COLORS = {
     "person": (0, 255, 0),
@@ -18,8 +19,46 @@ COLORS = {
     "truck": (255, 0, 0),
 }
 
+
+def gstreamer_pipeline(
+    sensor_id=0,
+    capture_width=1920,
+    capture_height=1080,
+    display_width=960,
+    display_height=540,
+    framerate=60,
+    flip_method=0,
+):
+    return (
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM), width=(int)%d, height=(int)%d, framerate=(fraction)%d/1 ! "
+        "nvvidconv flip-method=%d ! "
+        "video/x-raw, width=(int)%d, height=(int)%d, format=(string)BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=(string)BGR ! appsink"
+        % (
+            sensor_id,
+            capture_width,
+            capture_height,
+            framerate,
+            flip_method,
+            display_width,
+            display_height,
+        )
+    )
+
+
+def load_camera_source(source=0):
+    if source == "JETSON":
+        video_capture = cv2.VideoCapture(
+            gstreamer_pipeline(flip_method=2), cv2.CAP_GSTREAMER)
+    else:
+        video_capture = cv2.VideoCapture(source)
+    return video_capture
+
+
 model = YOLO(MODEL)
-cap = cv2.VideoCapture(SOURCE)
+cap = load_camera_source(SOURCE)
 
 while True:
     ret, frame = cap.read()
