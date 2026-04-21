@@ -2,10 +2,10 @@ import cv2
 from ultralytics import YOLO
 
 
-MODEL = "yolov8n.pt"
-CONFIDENCE = 0.5
+MODEL = "yolov8n.engine"
+CONFIDENCE = 0.7
 # SOURCE = "131232-749706873.mp4"  # 0 = webcam, or JETSON for gstreamer camera source
-SOURCE = 0
+SOURCE = "JETSON"
 
 # person, bicycle, car, motorcycle, bus, truck
 TARGET_CLASSES = [0, 1, 2, 3, 5, 7]
@@ -24,8 +24,8 @@ def gstreamer_pipeline(
     sensor_id=0,
     capture_width=1920,
     capture_height=1080,
-    display_width=960,
-    display_height=540,
+    display_width=640,
+    display_height=320,
     framerate=60,
     flip_method=0,
 ):
@@ -64,9 +64,15 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
+    frame = cv2.resize(frame, (640, 360))
 
     results = model.track(
-        frame, classes=TARGET_CLASSES, conf=CONFIDENCE, persist=True, verbose=False
+        frame, 
+        classes=TARGET_CLASSES, 
+        conf=CONFIDENCE, 
+        persist=True, 
+        verbose=False,
+    	stream=False 
     )[0]
 
     if results.boxes.id is not None:
