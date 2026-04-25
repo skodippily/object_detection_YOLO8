@@ -83,6 +83,8 @@ class YOLOTracker:
         # Load camera
         self.cap = self.load_camera_source(self.source)
 
+        self.crowded_threshold = 5
+
     def gstreamer_pipeline(
         self,
         sensor_id=0,
@@ -154,7 +156,7 @@ class YOLOTracker:
             color = self.colors.get(label, (0, 255, 0))
             display = f"{label} {track_id} ({conf:.0%})"
 
-            # print(f"Detected: {display}")
+            print(f"Detected: {display}")
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(
@@ -169,86 +171,69 @@ class YOLOTracker:
 
         return frame
 
-    def draw_density_heatmap(
-            self,
-            frame,
-            results,
-            alpha=0.35,
-            center_weight=True,
-            sigma=18):
+    def draw_density_heatmap(self, frame, results,
+                             blur_size=41,
+                             alpha=0.35,
+                             center_weight=True):
         """
-        Density heatmap using Gaussian blobs at object centers.
+        boxes: list of (x1,y1,x2,y2)
+        returns frame with density heatmap overlay
         """
 
         h, w = frame.shape[:2]
 
-        density = np.zeros(
-            (h, w),
-            dtype=np.float32
-        )
+        # accumulation map
+        density = np.zeros((h, w), dtype=np.float32)
 
-        img_center = w/2
+        cx_img = w/2
 
         for (x1, y1, x2, y2) in results.boxes.xyxy.int().tolist():
 
-            # choose center point but bottom-center works well for road objects
-            bx = int((x1+x2)/2)
-            by = int((y1+y2)/2)
-            bwidth = x2-x1
-            bheight = y2-y1
+            # clamp
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(w-1, x2)
+            y2 = min(h-1, y2)
 
-            if (
-                bx < 0 or bx >= w or
-                by < 0 or by >= h
-            ):
+            if x2 <= x1 or y2 <= y1:
                 continue
 
-            # weight
             area = (x2-x1)*(y2-y1)
+
+            # use box size as weight (nearer objects contribute more)
             weight = area/(w*h)
 
             if center_weight:
-                center_factor = 1 / (
-                    1 + abs(
-                        bx-img_center
-                    )/(0.25*w)
-                )
+                bx = (x1+x2)/2
+
+                # emphasize center collision corridor
+                center_factor = 1/(1+abs(bx-cx_img)/150)
+
                 weight *= center_factor
 
-            # Gaussian blob
-            for yy in range(-bheight, bheight+1):
-                for xx in range(-bwidth, bwidth+1):
-                    px = bx + xx
-                    py = by + yy
-                    if (
-                        0 <= px < w and
-                        0 <= py < h
-                    ):
-                        g = np.exp(
-                            -(
-                                xx**2 + yy**2
-                            )/(2*sigma**2)
-                        )
-                        density[py, px] += (
-                            weight*g
-                        )
+            # add occupancy contribution
+            density[y1:y2, x1:x2] += weight
 
-        total_density = density.sum()
-        avg_density = density.mean()
+        # smooth into heat-like field
+        density = cv2.GaussianBlur(
+            density,
+            (blur_size, blur_size),
+            0
+        )
 
-        # normalize
+        # normalize 0-255
         if density.max() > 0:
-            density /= density.max()
+            density = density/density.max()
 
-        heat = (
-            density*255
-        ).astype(np.uint8)
+        heat = (density*255).astype(np.uint8)
 
+        # apply heat colormap
         heat_color = cv2.applyColorMap(
             heat,
             cv2.COLORMAP_JET
         )
 
+        # overlay onto frame
         blended = cv2.addWeighted(
             frame,
             1-alpha,
@@ -257,16 +242,13 @@ class YOLOTracker:
             0
         )
 
-        return blended, {
-            "total_density": total_density,
-            "avg_density": avg_density
-        }
+        return blended
 
-    def getResults(self, crowded_threshold=0.0005):
+    def getResults(self):
         if self.results.boxes.id is None:
             return None
 
-        bbox_dict = []
+        results_dict = []
 
         for box in self.results.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -279,21 +261,13 @@ class YOLOTracker:
                 (x1, y1, x2, y2)
             )
 
-            bbox_dict.append({
+            results_dict.append({
                 "id": track_id,
                 "class": label,
                 "confidence": conf,
                 "box": (x1, y1, x2, y2),
                 "approaching": approaching
             })
-
-        # traffic 150
-        results_dict = {
-            "objects": bbox_dict,
-            "approches": any(obj["approaching"] for obj in bbox_dict),
-            "traffic_density": self.densities["total_density"],
-            "crowded": self.densities["avg_density"] > crowded_threshold
-        }
 
         return results_dict
 
@@ -309,9 +283,7 @@ class YOLOTracker:
 
             frame, self.results = self.process_frame(frame)
             frame = self.draw_detections(frame, self.results)
-            frame, self.densities = self.draw_density_heatmap(
-                frame, self.results)
-            print("test densities", self.densities)
+            frame = self.draw_density_heatmap(frame, self.results)
 
             cv2.imshow("Detection - Person & Vehicles", frame)
 
