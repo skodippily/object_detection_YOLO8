@@ -95,6 +95,8 @@ class YOLOTracker:
         # Load camera
         self.cap = self.load_camera_source(self.source)
 
+        self.results = None
+
     def gstreamer_pipeline(
         self,
         sensor_id=0,
@@ -149,41 +151,6 @@ class YOLOTracker:
         )[0]
 
         return frame, results
-
-    def draw_detections(self, frame, results):
-        if results.boxes.id is None:
-            return frame
-
-        for box in results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            label = results.names[int(box.cls[0])]
-            conf = float(box.conf[0])
-            track_id = int(box.id[0])
-
-            approaching = self.approach_detector.update_track(
-                track_id,
-                (x1, y1, x2, y2)
-            )
-            color = self.colors.get(label, (0, 255, 0))
-            if approaching:
-                label += " APPROACHING"
-
-            display = f"{label} {track_id} ({conf:.0%}) Approching:{approaching}"
-
-            # print(f"Detected: {display}")
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(
-                frame,
-                display,
-                (x1, y1 - 8),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                color,
-                2,
-            )
-
-        return frame
 
     def draw_density_heatmap(
             self,
@@ -271,15 +238,13 @@ class YOLOTracker:
             "avg_density": avg_density
         }
 
-    def getResults(self, crowded_threshold=0.0005):
-        if self.results.boxes.id is None:
-            return None
+    def draw_detections(self, frame, results):
+        if results.boxes.id is None:
+            return frame
 
-        bbox_dict = []
-
-        for box in self.results.boxes:
+        for box in results.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-            label = self.results.names[int(box.cls[0])]
+            label = results.names[int(box.cls[0])]
             conf = float(box.conf[0])
             track_id = int(box.id[0])
 
@@ -287,6 +252,47 @@ class YOLOTracker:
                 track_id,
                 (x1, y1, x2, y2)
             )
+            color = self.colors.get(label, (0, 255, 0))
+            if approaching:
+                label += " APPROACHING"
+
+            display = f"{label} {track_id} ({conf:.0%}) Approching:{approaching}"
+
+            # print(f"Detected: {display}")
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                frame,
+                display,
+                (x1, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2,
+            )
+
+        return frame
+
+    def getResults(self, frame, crowded_threshold=0.0005):
+        frame, results = self.process_frame(frame)
+
+        if results.boxes.id is None:
+            return frame, None
+
+        bbox_dict = []
+        for box in results.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            label = results.names[int(box.cls[0])]
+            conf = float(box.conf[0])
+            track_id = int(box.id[0])
+
+            approaching = self.approach_detector.update_track(
+                track_id,
+                (x1, y1, x2, y2)
+            )
+            color = self.colors.get(label, (0, 255, 0))
+            if approaching:
+                label += " APPROACHING"
 
             bbox_dict.append({
                 "id": track_id,
@@ -296,6 +302,28 @@ class YOLOTracker:
                 "approaching": approaching
             })
 
+            display = f"{label} {track_id} ({conf:.0%}) Approching:{approaching}"
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                frame,
+                display,
+                (x1, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2,
+            )
+
+        if self.heatmap_enabled and (
+            self.frame_count % self.heatmap_every_n == 0
+        ):
+            frame, self.densities = self.draw_density_heatmap(
+                frame,
+                results,
+                sigma=self.heatmap_sigma
+            )
+
         # traffic 150
         results_dict = {
             "objects": bbox_dict,
@@ -304,11 +332,19 @@ class YOLOTracker:
             "crowded": self.densities["avg_density"] > crowded_threshold
         }
 
-        return results_dict
+        return frame, results_dict
 
     def cleanup(self):
         self.cap.release()
         cv2.destroyAllWindows()
+
+    def getFrame(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            return
+        self.frame_count += 1
+
+        return frame
 
     def run(self):
         while True:
@@ -330,7 +366,7 @@ class YOLOTracker:
                     sigma=self.heatmap_sigma
                 )
 
-            cv2.imshow("Detection - Person & Vehicles", frame)
+            cv2.imshow("Camera frame", frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
