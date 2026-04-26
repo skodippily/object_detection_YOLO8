@@ -61,7 +61,7 @@ class YOLOTracker:
         target_classes=None,
         imgsz=320,
         heatmap_enabled=True,
-        heatmap_every_n=3,
+        heatmap_every_n=1,
         heatmap_sigma=18,
         jetson_mode=False,
     ):
@@ -168,7 +168,7 @@ class YOLOTracker:
             if approaching:
                 label += " APPROACHING"
 
-            display = f"{label} {track_id} ({conf:.0%})"
+            display = f"{label} {track_id} ({conf:.0%}) Approching:{approaching}"
 
             # print(f"Detected: {display}")
 
@@ -346,7 +346,7 @@ if __name__ == "__main__":
         jetson_mode=False,
         imgsz=320,
         heatmap_enabled=True,
-        heatmap_every_n=3,
+        heatmap_every_n=1,
         heatmap_sigma=14
     )
     tracker.run()
