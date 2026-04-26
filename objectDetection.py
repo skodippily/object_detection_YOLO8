@@ -55,16 +55,28 @@ class ApproachDetector:
 class YOLOTracker:
     def __init__(
         self,
-        model_path="yolov8n.pt",
-        source=0,
+        model_path="yolov8n.engine",
+        source="JETSON",  # 0 or "JETSON"
         confidence=0.5,
         target_classes=None,
+        imgsz=320,
+        heatmap_enabled=True,
+        heatmap_every_n=3,
+        heatmap_sigma=18,
+        jetson_mode=False,
     ):
         # Config
         self.model_path = model_path
         self.source = source
         self.confidence = confidence
         self.target_classes = target_classes or [0, 1, 2, 3, 5, 7]
+        self.imgsz = imgsz
+        self.heatmap_enabled = heatmap_enabled
+        self.heatmap_every_n = max(1, heatmap_every_n)
+        self.heatmap_sigma = heatmap_sigma
+        self.jetson_mode = jetson_mode or source == "JETSON"
+        self.frame_count = 0
+        self.densities = {"total_density": 0.0, "avg_density": 0.0}
 
         # Colors
         self.colors = {
@@ -117,7 +129,9 @@ class YOLOTracker:
                 self.gstreamer_pipeline(flip_method=2),
                 cv2.CAP_GSTREAMER
             )
-        return cv2.VideoCapture(source)
+        cap = cv2.VideoCapture(source)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
 
     def process_frame(self, frame):
         frame = cv2.resize(frame, (640, 360))
@@ -129,7 +143,9 @@ class YOLOTracker:
             tracker="bytetrack.yaml",
             persist=True,
             verbose=False,
-            stream=False
+            stream=False,
+            imgsz=self.imgsz,
+            half=self.jetson_mode
         )[0]
 
         return frame, results
@@ -148,10 +164,10 @@ class YOLOTracker:
                 track_id,
                 (x1, y1, x2, y2)
             )
+            color = self.colors.get(label, (0, 255, 0))
             if approaching:
                 label += " APPROACHING"
 
-            color = self.colors.get(label, (0, 255, 0))
             display = f"{label} {track_id} ({conf:.0%})"
 
             # print(f"Detected: {display}")
@@ -215,23 +231,16 @@ class YOLOTracker:
                 )
                 weight *= center_factor
 
-            # Gaussian blob
-            for yy in range(-bheight, bheight+1):
-                for xx in range(-bwidth, bwidth+1):
-                    px = bx + xx
-                    py = by + yy
-                    if (
-                        0 <= px < w and
-                        0 <= py < h
-                    ):
-                        g = np.exp(
-                            -(
-                                xx**2 + yy**2
-                            )/(2*sigma**2)
-                        )
-                        density[py, px] += (
-                            weight*g
-                        )
+            density[by, bx] += weight
+
+        # Blur once instead of doing a Gaussian loop per pixel per object.
+        density = cv2.GaussianBlur(
+            density,
+            (0, 0),
+            sigmaX=sigma,
+            sigmaY=sigma,
+            borderType=cv2.BORDER_REPLICATE
+        )
 
         total_density = density.sum()
         avg_density = density.mean()
@@ -307,11 +316,19 @@ class YOLOTracker:
             if not ret:
                 break
 
+            self.frame_count += 1
+
             frame, self.results = self.process_frame(frame)
             frame = self.draw_detections(frame, self.results)
-            frame, self.densities = self.draw_density_heatmap(
-                frame, self.results)
-            print("test densities", self.densities)
+
+            if self.heatmap_enabled and (
+                self.frame_count % self.heatmap_every_n == 0
+            ):
+                frame, self.densities = self.draw_density_heatmap(
+                    frame,
+                    self.results,
+                    sigma=self.heatmap_sigma
+                )
 
             cv2.imshow("Detection - Person & Vehicles", frame)
 
@@ -323,8 +340,13 @@ class YOLOTracker:
 
 if __name__ == "__main__":
     tracker = YOLOTracker(
-        model_path="yolov8n.pt",
-        source=0,  # or "JETSON"
-        confidence=0.7
+        model_path="yolov8n.engine",
+        source="JETSON",  # 0 or "JETSON"
+        confidence=0.7,
+        jetson_mode=False,
+        imgsz=320,
+        heatmap_enabled=True,
+        heatmap_every_n=3,
+        heatmap_sigma=14
     )
     tracker.run()
