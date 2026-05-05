@@ -323,12 +323,12 @@ class YOLOTracker:
                 results,
                 sigma=self.heatmap_sigma
             )
-
         # traffic 150
         results_dict = {
             "objects": bbox_dict,
             "approches": any(obj["approaching"] for obj in bbox_dict),
             "traffic_density": self.densities["total_density"],
+            "avg_density": self.densities["avg_density"],
             "crowded": self.densities["avg_density"] > crowded_threshold
         }
 
